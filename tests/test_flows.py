@@ -19,7 +19,7 @@ async def register_teacher(h, trial=True):
 async def test_teacher_registration_and_gate(h):
     calls = await register_teacher(h, trial=False)
     text = h.texts(calls)
-    assert "Вход учителя с других аккаунтов" in text
+    assert "секрет" not in text.lower() and "Как подключить учеников" in text
     assert "https://t.me/test_tutor_bot?start=" in text
     assert "активируйте подписку" in text
     # Без подписки расписание закрыто
@@ -232,9 +232,9 @@ async def test_cancel_and_restart(h):
 async def test_second_teacher_account_login(h):
     await register_teacher(h)
     teacher = await h.db.get_teacher(1)
-    await h.send(555, "/start")
-    await h.click(555, "reg:login")
-    calls = await h.send(555, teacher["teacher_secret"])
+    calls = await h.click(T, "inv:login")
+    assert f"start=login_{teacher['teacher_secret']}" in h.texts(calls)
+    calls = await h.send(555, f"/start login_{teacher['teacher_secret']}")
     assert "Вы вошли" in h.texts(calls)
     calls = await h.send(555, B.SCHEDULE)
     assert "Раздел расписания" in h.texts(calls)
@@ -550,3 +550,42 @@ async def test_first_teacher_becomes_owner_without_admin_ids(h):
         h.config.admin_ids.update(saved)
         keyboards.ADMIN_IDS.clear()
         keyboards.ADMIN_IDS.update(saved)
+
+
+
+async def test_invite_screen_preview_and_family_buttons(h):
+    await register_teacher(h)
+    await h.click(T, "sch:bulk")
+    await h.send(T, "Пн 15:00 Маша 1500\nСр 15:00 Петя 3000")
+    await h.click(T, "sch:bulk:save")
+    calls = await h.send(T, B.SECRETS)
+    assert "Как подключить учеников" in h.texts(calls)
+    calls = await h.click(T, "inv:preview")
+    text = h.texts(calls)
+    assert "Твоё расписание" in text and "₽" not in text and "1500" not in text
+    # Старая кнопка «Мои секреты» тоже работает
+    calls = await h.send(T, B.OLD_SECRETS)
+    assert "Как подключить учеников" in h.texts(calls)
+    # Родитель нажал «Я родитель» и переслал ссылку целиком; O и 0 не путаются
+    teacher = await h.db.get_teacher(1)
+    await h.send(P, "/start")
+    await h.click(P, "reg:parent")
+    code = teacher["student_secret"]
+    calls = await h.send(P, f"https://t.me/test_tutor_bot?start={code.lower()}")
+    assert "имя и фамилию ребёнка" in h.texts(calls)
+    await h.send(P, "Маша")
+    acc = await h.db.get_account(P)
+    assert acc["role"] == "parent" and acc["student_id"] == (await h.db.find_student_by_name(1, "Маша"))["id"]
+    # Неверная ссылка — понятный ответ без слова «секрет»
+    await h.send(S, "/start")
+    await h.click(S, "reg:student")
+    calls = await h.send(S, "XXXXXXXX")
+    assert "Не получилось найти приглашение" in h.texts(calls)
+    calls = await h.send(S, "/start WRONGCODE")
+    assert "Не получилось найти приглашение" in h.texts(calls)
+
+
+async def test_codes_ignore_lookalike_symbols(h):
+    await register_teacher(h)
+    await h.db.update_teacher(1, student_secret="PN65N60ZMO")
+    assert await h.db.teacher_by_student_secret("pn65n6ozm0")

@@ -189,7 +189,8 @@ TEACHER_COLUMNS = {
     "ask_report": "INTEGER NOT NULL DEFAULT 1",
 }
 
-SECRET_ALPHABET = string.ascii_uppercase + string.digits
+# без похожих символов: O/0, I/1/L
+SECRET_ALPHABET = "".join(c for c in string.ascii_uppercase + string.digits if c not in "O0I1L")
 
 
 def now_iso() -> str:
@@ -328,10 +329,16 @@ class Database:
         return await self._one("SELECT * FROM teachers WHERE id = ?", teacher_id)
 
     async def teacher_by_teacher_secret(self, secret: str) -> dict | None:
-        return await self._one("SELECT * FROM teachers WHERE teacher_secret = ?", secret.strip().upper())
+        return await self._by_code("teacher_secret", secret)
 
     async def teacher_by_student_secret(self, secret: str) -> dict | None:
-        return await self._one("SELECT * FROM teachers WHERE student_secret = ?", secret.strip().upper())
+        return await self._by_code("student_secret", secret)
+
+    async def _by_code(self, column: str, code: str) -> dict | None:
+        """Найти по коду, не различая похожие символы (O и 0, I/L и 1) и регистр."""
+        def norm(sql_or_value: str) -> str:
+            return f"REPLACE(REPLACE(REPLACE({sql_or_value}, 'O', '0'), 'I', '1'), 'L', '1')"
+        return await self._one(f"SELECT * FROM teachers WHERE {norm(column)} = {norm('?')}", code.strip().upper())
 
     async def all_teachers(self) -> list[dict]:
         return await self._all("SELECT * FROM teachers")

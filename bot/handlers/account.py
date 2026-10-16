@@ -1,4 +1,4 @@
-"""Подписка, секреты, настройки и мемы преподавателя."""
+"""Подписка, приглашения, настройки и мемы преподавателя."""
 import logging
 from datetime import datetime, timezone
 from html import escape
@@ -16,9 +16,9 @@ from ..filters import TEXT_INPUT
 from ..keyboards import B
 from ..logic import SHORT, WEEKDAYS, local_now, parse_time, tz_name
 from ..notify import send_meme
-from ..texts import secrets_text
+from ..texts import invite_text, login_link
 from ..ui import show
-from ..broadcast import send_weekly
+from ..broadcast import preview_messages, send_weekly
 from ..promo import apply_promo
 
 router = Router(name="account")
@@ -159,24 +159,56 @@ async def cancel_sub_no(call: CallbackQuery):
     await show(call, "Хорошо, подписка остаётся 👍")
 
 
-# ---------------------------------------------------------------- секреты
+# ---------------------------------------------------------------- пригласить учеников
 
-@router.message(F.text == B.SECRETS)
-async def my_secrets(message: Message, state: FSMContext, bot: Bot, teacher: dict):
+def _invite_markup() -> kb.InlineKeyboardMarkup:
+    return kb.inline([
+        [("📋 Готовое сообщение для учеников", "stu:invite")],
+        [("👀 Как это видят ученики", "inv:preview")],
+        [("📱 Вход с другого телефона", "inv:login")],
+        [("🔄 Новая общая ссылка", "sec:new:student")],
+    ])
+
+
+@router.message(F.text.in_({B.SECRETS, B.OLD_SECRETS}))
+async def invite_menu(message: Message, state: FSMContext, bot: Bot, teacher: dict):
     await state.clear()
-    await message.answer(await secrets_text(bot, teacher), disable_web_page_preview=True,
-                         reply_markup=kb.inline([
-                             [("🔄 Новый секрет для учеников", "sec:new:student")],
-                             [("🔄 Новый секрет для входа учителя", "sec:new:teacher")],
-                         ]))
+    if message.text == B.OLD_SECRETS:  # обновить старую клавиатуру
+        await message.answer("Раздел теперь называется «🔗 Пригласить учеников».",
+                             reply_markup=kb.teacher_menu(message.from_user.id in kb.ADMIN_IDS))
+    await message.answer(await invite_text(bot, teacher), disable_web_page_preview=True,
+                         reply_markup=_invite_markup())
+
+
+@router.callback_query(F.data == "inv:menu")
+async def invite_menu_cb(call: CallbackQuery, bot: Bot, teacher: dict):
+    await show(call, await invite_text(bot, teacher), _invite_markup())
+
+
+@router.callback_query(F.data == "inv:login")
+async def login_info(call: CallbackQuery, bot: Bot, teacher: dict):
+    link = await login_link(bot, teacher)
+    await show(call, "📱 <b>Вход с другого телефона</b>\n\n"
+                     "Если хотите открыть свой кабинет преподавателя ещё на одном телефоне или аккаунте Telegram, "
+                     f"откройте там эту ссылку:\n{link}\n\n"
+                     "⚠️ Не пересылайте её ученикам: по ней открывается ваш кабинет с ценами и доходом.",
+               kb.inline([[("🔄 Сменить ссылку", "sec:new:teacher")], kb.back("inv:menu")]))
+
+
+@router.callback_query(F.data == "inv:preview")
+async def preview(call: CallbackQuery, db: Database, teacher: dict):
+    await call.answer()
+    for text in await preview_messages(db, teacher):
+        await call.message.answer(text, disable_web_page_preview=True)
 
 
 @router.callback_query(F.data.startswith("sec:new:"))
 async def new_secret_ask(call: CallbackQuery):
     kind = call.data.split(":")[2]
-    note = ("Старая ссылка-приглашение перестанет работать. Уже подключённые ученики останутся."
-            if kind == "student" else "Старый секрет входа перестанет работать. Уже вошедшие аккаунты останутся.")
-    await show(call, f"Сгенерировать новый секрет? {note}", kb.confirm(f"sec:yes:{kind}", "sec:no", "Да", "Нет"))
+    note = ("Старая общая ссылка перестанет работать, личные ссылки тоже обновятся. "
+            "Уже подключённые ученики и родители останутся."
+            if kind == "student" else "Старая ссылка для входа перестанет работать. Уже вошедшие аккаунты останутся.")
+    await show(call, f"Сделать новую ссылку? {note}", kb.confirm(f"sec:yes:{kind}", "sec:no", "Да", "Нет"))
 
 
 @router.callback_query(F.data.startswith("sec:yes:"))
@@ -184,12 +216,15 @@ async def new_secret(call: CallbackQuery, db: Database, bot: Bot, teacher: dict)
     kind = call.data.split(":")[2]
     await db.regenerate_secret(teacher["id"], f"{kind}_secret")
     teacher = await db.get_teacher(teacher["id"])
-    await show(call, await secrets_text(bot, teacher))
+    if kind == "teacher":
+        await login_info(call, bot, teacher)
+    else:
+        await show(call, await invite_text(bot, teacher), _invite_markup())
 
 
 @router.callback_query(F.data == "sec:no")
 async def new_secret_no(call: CallbackQuery, bot: Bot, teacher: dict):
-    await show(call, await secrets_text(bot, teacher))
+    await show(call, await invite_text(bot, teacher), _invite_markup())
 
 
 # ---------------------------------------------------------------- настройки
@@ -361,7 +396,7 @@ async def weekly_now(call: CallbackQuery, db: Database, bot: Bot, teacher: dict)
     sent, total = await send_weekly(bot, db, teacher)
     if total == 0:
         text = ("Пока некому отправлять: ни ученики, ни родители не подключились к боту.\n"
-                "Отправьте им ссылку-приглашение из раздела «🔑 Мои секреты».")
+                "Отправьте им ссылку из раздела «🔗 Пригласить учеников».")
     else:
         text = f"✅ Расписание отправлено: {sent} из {total} получателей."
     await call.message.answer(text)

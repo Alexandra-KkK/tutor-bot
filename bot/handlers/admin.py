@@ -66,13 +66,13 @@ async def teachers(event, db: Database):
             state = ("пробный до " if st.kind == "trial" else "оплачено до ") + st.until.strftime("%d.%m.%Y")
         else:
             state = "не активна"
-        lines.append(f"• {escape(t['name'])} · {state}\n  секрет входа: <code>{t['teacher_secret']}</code>")
+        lines.append(f"• {escape(t['name'])} · {state}\n  код входа: <code>{t['teacher_secret']}</code>")
     total = len(lines)
     while len("\n".join(lines)) > 3500:  # лимит сообщения Telegram — 4096 символов
         lines.pop()
     more = f"\n…и ещё {total - len(lines)}" if len(lines) < total else ""
     text = f"👩‍🏫 <b>Преподаватели</b> ({total})\n\n" + ("\n".join(lines) + more if lines else "Пока никого.")
-    text += "\n\nПродлить вручную: <code>/grant СЕКРЕТ ДНЕЙ</code>"
+    text += "\n\nПродлить вручную: <code>/grant КОД ДНЕЙ</code>"
     await show(event, text, kb.inline([kb.back("adm:menu")]))
 
 
@@ -202,11 +202,11 @@ async def promo_toggle(call: CallbackQuery, db: Database, bot: Bot):
 async def grant(message: Message, command: CommandObject, db: Database, bot: Bot, config: Config):
     parts = (command.args or "").split()
     if len(parts) != 2 or not parts[1].lstrip("-").isdigit():
-        await message.answer("Формат: <code>/grant СЕКРЕТ_УЧИТЕЛЯ ДНЕЙ</code>")
+        await message.answer("Формат: <code>/grant КОД_ВХОДА ДНЕЙ</code>")
         return
     teacher = await db.teacher_by_teacher_secret(parts[0])
     if not teacher:
-        await message.answer("Преподаватель с таким секретом не найден.")
+        await message.answer("Преподаватель с таким кодом не найден.")
         return
     days = int(parts[1])
     until = subscription.extend_paid(teacher, days)

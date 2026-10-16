@@ -1,4 +1,5 @@
 """Старт, регистрация, «Отмена» и «Рестарт профиля»."""
+import re
 from html import escape
 
 from aiogram import Bot, F, Router
@@ -14,7 +15,7 @@ from ..db import Database
 from ..filters import TEXT_INPUT, NoAccount
 from ..keyboards import B
 from ..promo import apply_promo
-from ..texts import WELCOME, TEACHER_HELP, family_help, need_subscription_text, secrets_text
+from ..texts import WELCOME, TEACHER_HELP, family_help, invite_text, need_subscription_text
 from ..ui import send_menu, show
 
 router = Router(name="common")
@@ -22,16 +23,19 @@ router = Router(name="common")
 
 class Reg(StatesGroup):
     teacher_name = State()
-    teacher_secret = State()
-    student_secret = State()
+    invite = State()
     child_name = State()
+
+
+NOT_FOUND = ("Не получилось найти приглашение 🤔\nПроверьте ссылку или попросите у преподавателя новую "
+             "и просто нажмите на неё.")
 
 
 # ---------------------------------------------------------------- /start
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, command: CommandObject, state: FSMContext, db: Database,
-                    account: dict | None, teacher: dict | None):
+                    config: Config, account: dict | None, teacher: dict | None):
     await state.clear()
     arg = (command.args or "").strip()
     if arg.startswith("promo_"):
@@ -47,6 +51,9 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext,
             await message.answer(WELCOME, reply_markup=kb.start_roles())
             return
         arg = ""
+    if arg.startswith("login_"):
+        await _login(message, db, config, account, arg[len("login_"):])
+        return
     if account and not arg:
         name = escape(teacher["name"]) if account["role"] == "teacher" else ""
         await send_menu(message, account, f"С возвращением{', ' + name if name else ''}! Главное меню:")
@@ -56,7 +63,10 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext,
         target = await db.teacher_by_student_secret(secret)
         if target:
             if account and account["role"] == "teacher":
-                await message.answer("Это приглашение для учеников и родителей, а вы вошли как преподаватель.")
+                await message.answer(
+                    "Это ссылка для учеников и родителей, а вы вошли как преподаватель, поэтому ничего не изменится.\n\n"
+                    "Посмотреть, что получают ученики и родители: «🔗 Пригласить учеников» → «👀 Как это видят ученики». "
+                    "Проверить подключение по-настоящему можно с другого аккаунта Telegram.")
                 return
             invited = await db.get_student(target["id"], int(sid)) if sid.isascii() and sid.isdigit() else None
             if invited and not invited["active"]:
@@ -67,6 +77,9 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext,
                 f"Вас пригласил преподаватель <b>{escape(target['name'])}</b>.{who}\n\nКто вы?",
                 reply_markup=kb.inline([[("Я ученик", "join:student"), ("Я родитель", "join:parent")]]),
             )
+            return
+        await message.answer(NOT_FOUND)
+        if account:
             return
     await message.answer(WELCOME, reply_markup=kb.start_roles())
 
@@ -102,7 +115,7 @@ async def reg_teacher_name(message: Message, state: FSMContext, db: Database, bo
     await state.clear()
     account = await db.get_account(message.from_user.id)
     await send_menu(message, account, TEACHER_HELP)
-    await message.answer(await secrets_text(bot, teacher))
+    await message.answer(await invite_text(bot, teacher), disable_web_page_preview=True)
     if pending_promo:
         ok, text = await apply_promo(db, teacher, pending_promo, message.from_user.id)
         await message.answer(text)
@@ -119,55 +132,57 @@ def _is_teacher(account: dict | None) -> bool:
     return bool(account and account["role"] == "teacher")
 
 
-@router.callback_query(F.data == "reg:login")
-async def reg_login(call: CallbackQuery, state: FSMContext, account: dict | None):
-    if _is_teacher(account):
-        await call.answer(TEACHER_BUSY, show_alert=True)
-        return
-    await state.set_state(Reg.teacher_secret)
-    await show(call, "Введите секрет «Вход учителя с других аккаунтов».\n"
-                     "Его можно найти в разделе «Мои секреты» на основном аккаунте.")
-
-
-@router.message(Reg.teacher_secret, TEXT_INPUT)
-async def reg_login_secret(message: Message, state: FSMContext, db: Database, config: Config):
-    teacher = await db.teacher_by_teacher_secret(message.text)
+async def _login(message: Message, db: Database, config: Config, account: dict | None, code: str):
+    """Вход в кабинет преподавателя с другого телефона или аккаунта по ссылке из «Пригласить учеников»."""
+    teacher = await db.teacher_by_teacher_secret(code)
     if not teacher:
-        await message.answer("Такой секрет не найден. Проверьте и отправьте ещё раз или нажмите /start.")
+        await message.answer("Ссылка для входа не подходит. Откройте свежую ссылку: «🔗 Пригласить учеников» → "
+                             "«📱 Вход с другого телефона» на основном аккаунте.")
+        return
+    if account and account["role"] == "teacher" and account["teacher_id"] == teacher["id"]:
+        await send_menu(message, account, "Вы уже в этом кабинете 👍")
+        return
+    if account:
+        await message.answer("Этот аккаунт уже подключён к боту. Сначала нажмите «🔄 Рестарт профиля», "
+                             "потом откройте ссылку для входа ещё раз.")
         return
     await db.link_account(message.from_user.id, "teacher", teacher["id"],
                           full_name=message.from_user.full_name, username=message.from_user.username or "")
     if message.from_user.id in config.admin_ids:
         await db.update_teacher(teacher["id"], free_forever=1)
-    await state.clear()
     account = await db.get_account(message.from_user.id)
-    await send_menu(message, account, f"Вы вошли в профиль <b>{escape(teacher['name'])}</b>.")
+    await send_menu(message, account, f"Вы вошли в кабинет преподавателя <b>{escape(teacher['name'])}</b>.")
 
 
 # ---------------------------------------------------------------- регистрация ученика и родителя
 
-@router.callback_query(F.data == "reg:student")
-async def reg_student(call: CallbackQuery, state: FSMContext, account: dict | None):
+@router.callback_query(F.data.in_({"reg:student", "reg:parent"}))
+async def reg_family(call: CallbackQuery, state: FSMContext, account: dict | None):
     if _is_teacher(account):
         await call.answer(TEACHER_BUSY, show_alert=True)
         return
-    await state.set_state(Reg.student_secret)
-    await show(call, "Отправьте «Секрет для регистрации учеников», который дал преподаватель.\n"
-                     "Или просто откройте ссылку-приглашение от преподавателя.")
+    role = "student" if call.data == "reg:student" else "parent"
+    await state.set_state(Reg.invite)
+    await state.update_data(join_role=role)
+    await show(call, "Чтобы подключиться, нажмите на ссылку-приглашение, которую прислал преподаватель. "
+                     "Больше ничего делать не нужно 🙂\n\n"
+                     "Если ссылка не открывается, перешлите её сюда сообщением.")
 
 
-@router.message(Reg.student_secret, TEXT_INPUT)
-async def reg_student_secret(message: Message, state: FSMContext, db: Database):
-    teacher = await db.teacher_by_student_secret(message.text.strip().partition("_")[0])
+@router.message(Reg.invite, TEXT_INPUT)
+async def reg_invite(message: Message, state: FSMContext, db: Database, bot: Bot):
+    m = re.search(r"start=([A-Za-z0-9_]+)", message.text)
+    code = m.group(1) if m else message.text.strip()
+    secret, _, sid = code.partition("_")
+    teacher = await db.teacher_by_student_secret(secret)
     if not teacher:
-        await message.answer("Такой секрет не найден. Проверьте и отправьте ещё раз.")
+        await message.answer(NOT_FOUND)
         return
+    invited = await db.get_student(teacher["id"], int(sid)) if sid.isascii() and sid.isdigit() else None
     await state.set_state(None)
-    await state.update_data(join_teacher=teacher["id"], join_student=None)
-    await message.answer(
-        f"Преподаватель: <b>{escape(teacher['name'])}</b>.\nКто вы?",
-        reply_markup=kb.inline([[("Я ученик", "join:student"), ("Я родитель", "join:parent")]]),
-    )
+    await state.update_data(join_teacher=teacher["id"], join_student=invited["id"] if invited else None)
+    role = (await state.get_data()).get("join_role", "student")
+    await _join(message, state, db, bot, teacher, role, message.from_user)
 
 
 @router.callback_query(F.data.in_({"join:student", "join:parent"}))
@@ -180,17 +195,21 @@ async def join_role(call: CallbackQuery, state: FSMContext, db: Database, bot: B
     if not teacher:
         await show(call, "Приглашение устарело. Откройте ссылку от преподавателя ещё раз.")
         return
-    role = call.data.split(":")[1]
+    await call.answer()
+    await call.message.edit_reply_markup(reply_markup=None)
+    await _join(call.message, state, db, bot, teacher, call.data.split(":")[1], call.from_user)
+
+
+async def _join(message: Message, state: FSMContext, db: Database, bot: Bot, teacher: dict, role: str, user):
+    data = await state.get_data()
     await state.update_data(join_role=role)
     invited = data.get("join_student") and await db.get_student(teacher["id"], data["join_student"])
     if invited and invited["active"]:
-        await call.answer()
-        await call.message.edit_reply_markup(reply_markup=None)
-        await _finish_join(call.message, state, db, bot, teacher, invited["id"], role, call.from_user)
+        await _finish_join(message, state, db, bot, teacher, invited["id"], role, user)
         return
     await state.set_state(Reg.child_name)
     text = "Напишите ваше имя и фамилию:" if role == "student" else "Напишите имя и фамилию ребёнка:"
-    await show(call, text)
+    await message.answer(f"Преподаватель: <b>{escape(teacher['name'])}</b>.\n{text}")
 
 
 @router.message(Reg.child_name, TEXT_INPUT)
@@ -253,7 +272,9 @@ async def restart(message: Message, state: FSMContext, db: Database, account: di
                     "Данные останутся доступны на других ваших аккаунтах. Продолжить?")
         else:
             text = ("⚠️ Профиль будет удалён полностью: расписание, ученики, доход и подписка. "
-                    "Ученики и родители тоже будут отключены. Это нельзя отменить.\n\nУдалить профиль?")
+                    "Ученики и родители тоже будут отключены. Это нельзя отменить.\n\n"
+                    "Если хотите посмотреть, что видят ученики, удалять профиль не нужно: "
+                    "«🔗 Пригласить учеников» → «👀 Как это видят ученики».\n\nУдалить профиль?")
     else:
         text = "Вы будете отключены от преподавателя. Подключиться снова можно по ссылке-приглашению. Продолжить?"
     await message.answer(text, reply_markup=kb.confirm("restart:yes", "restart:no", "Да", "Нет"))

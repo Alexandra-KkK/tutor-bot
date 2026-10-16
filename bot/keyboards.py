@@ -11,7 +11,8 @@ class B:
     INCOME = "💰 Доход"
     MY_SUB = "⭐ Моя подписка"
     CANCEL_SUB = "Отменить подписку"
-    SECRETS = "🔑 Мои секреты"
+    SECRETS = "🔗 Пригласить учеников"
+    OLD_SECRETS = "🔑 Мои секреты"  # старое название кнопки, у кого осталась старая клавиатура
     SETTINGS = "⚙️ Настройки"
     SUPPORT = "💬 Обратиться в поддержку"
     CANCEL = "✖️ Отмена"
@@ -29,7 +30,7 @@ ADMIN_IDS: set[int] = set()
 
 TEACHER_MENU_BUTTONS = {
     B.SCHEDULE, B.STUDENTS, B.INCOME, B.MY_SUB, B.CANCEL_SUB, B.SECRETS,
-    B.SETTINGS, B.SUPPORT, B.CANCEL, B.RESTART,
+    B.SETTINGS, B.SUPPORT, B.CANCEL, B.RESTART, B.OLD_SECRETS,
 }
 STUDENT_MENU_BUTTONS = {B.MY_SCHEDULE, B.NEXT_LESSON, B.MY_TEACHER, B.SUPPORT, B.CANCEL, B.RESTART}
 ALL_MENU_BUTTONS = TEACHER_MENU_BUTTONS | STUDENT_MENU_BUTTONS | {B.ADMIN}
@@ -39,11 +40,12 @@ def teacher_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     from . import subscription
     kb = ReplyKeyboardBuilder()
     if subscription.ENABLED:
-        buttons = (B.SCHEDULE, B.STUDENTS, B.INCOME, B.MY_SUB, B.CANCEL_SUB, B.SECRETS, B.SETTINGS, B.SUPPORT)
-        layout = (1, 2, 2, 2, 1, 2)
+        # «Отменить подписку» — внутри «Моя подписка», чтобы не перегружать меню
+        buttons = (B.SCHEDULE, B.STUDENTS, B.INCOME, B.SECRETS, B.MY_SUB, B.SETTINGS, B.SUPPORT)
+        layout = (1, 2, 2, 2, 2)
     else:
         buttons = (B.SCHEDULE, B.STUDENTS, B.INCOME, B.SECRETS, B.SETTINGS, B.SUPPORT)
-        layout = (1, 2, 2, 1, 2)
+        layout = (1, 2, 1, 2, 2)
     for text in buttons:
         kb.button(text=text)
     kb.button(text=B.CANCEL)
@@ -86,9 +88,9 @@ def back(data: str, text: str = "Вернуться") -> list[tuple[str, str]]:
 
 def start_roles() -> InlineKeyboardMarkup:
     return inline([
-        [("Я преподаватель", "reg:teacher")],
-        [("Я ученик", "reg:student")],
-        [("Войти по секрету учителя", "reg:login")],
+        [("👩‍🏫 Я преподаватель", "reg:teacher")],
+        [("🎒 Я ученик", "reg:student")],
+        [("👪 Я родитель", "reg:parent")],
     ])
 
 

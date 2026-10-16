@@ -37,29 +37,54 @@ def _left(minutes: int) -> str:
 
 # ---------------------------------------------------------------- еженедельная рассылка
 
-async def send_weekly(bot: Bot, db: Database, teacher: dict) -> tuple[int, int]:
-    """Каждому подключённому ученику и родителю — его занятия на 7 дней начиная с завтра."""
-    sch = await TeacherSchedule.load(db, teacher)
+def weekly_text(sch: TeacherSchedule, teacher: dict, student: dict, role: str) -> str:
+    """Расписание ученика на 7 дней начиная с завтра — без цен и без других учеников."""
     start = sch.today + timedelta(days=1)
     end = start + timedelta(days=6)
     period = f"{start.strftime('%d.%m')}–{end.strftime('%d.%m')}"
-    link = teacher["schedule_link"]
+    body = sch.range_text(start, 7, student_id=student["id"], show_price=False, show_name=False,
+                          empty_days=False)
+    if role == "parent":
+        head = f"📅 Расписание занятий: <b>{escape(student['name'])}</b>, {period}"
+    else:
+        head = f"📅 Твоё расписание на неделю ({period})"
+    text = f"{head}\n\n{body}"
+    if teacher["schedule_link"]:
+        text += f"\n\n📎 Общее расписание: {escape(teacher['schedule_link'])}"
+    return text + f"\n\nПреподаватель: {escape(teacher['name'])}"
+
+
+async def preview_messages(db: Database, teacher: dict) -> list[str]:
+    """Примеры сообщений, которые получают ученик и родитель (преподавателю «посмотреть глазами ученика»)."""
+    sch = await TeacherSchedule.load(db, teacher)
+    lesson = next((l for i in range(1, 8) for l in sch.on(sch.today + timedelta(days=i))), None)
+    student = sch.students.get(lesson.student_id) if lesson else {"id": 0, "name": "Маша"}
+    time, end = (lesson.time, lesson.end) if lesson else ("16:00", "17:00")
+    name = escape(teacher["name"])
+    week = weekly_text(sch, teacher, student, "student") if lesson else (
+        "📅 Твоё расписание на неделю\n\nСреда\n16:00–17:00\n\nПреподаватель: " + name)
+    phrase = REMINDER_PHRASES[0]
+    return [
+        "👀 Так выглядят сообщения ученикам и родителям. Это только пример: им сейчас ничего не отправлено. "
+        "Цены и других учеников они никогда не видят.",
+        "🎒 <b>Ученику, раз в неделю:</b>\n\n" + week,
+        f"🎒 <b>Ученику, перед уроком</b> (с мемом, если вы их добавили):\n\n⏰ {phrase}\n\n"
+        f"Урок сегодня в {time}–{end}, преподаватель {name}.\n[кнопки «👍 Буду» и «😔 Не смогу»]",
+        f"👪 <b>Родителю, после урока:</b>\n\n✅ Урок проведён: <b>{escape(student['name'])}</b>, {time}–{end}.\n"
+        f"Преподаватель: {name}",
+    ]
+
+
+async def send_weekly(bot: Bot, db: Database, teacher: dict) -> tuple[int, int]:
+    """Каждому подключённому ученику и родителю — его занятия на 7 дней начиная с завтра."""
+    sch = await TeacherSchedule.load(db, teacher)
     sent = total = 0
     for acc in await db.family_accounts(teacher["id"]):
         student = sch.students.get(acc["student_id"])
         if not student or not student["active"]:
             continue
         total += 1
-        body = sch.range_text(start, 7, student_id=student["id"], show_price=False, show_name=False,
-                              empty_days=False)
-        if acc["role"] == "parent":
-            head = f"📅 Расписание занятий: <b>{escape(student['name'])}</b>, {period}"
-        else:
-            head = f"📅 Твоё расписание на неделю ({period})"
-        text = f"{head}\n\n{body}"
-        if link:
-            text += f"\n\n📎 Общее расписание: {escape(link)}"
-        text += f"\n\nПреподаватель: {escape(teacher['name'])}"
+        text = weekly_text(sch, teacher, student, acc["role"])
         meme = None
         if acc["role"] == "student" and teacher["memes_on"]:
             meme = await db.random_meme(teacher["id"])
