@@ -62,10 +62,10 @@ async def homework_send(message: Message, state: FSMContext, db: Database, bot: 
     sent = 0
     for acc in accounts:
         head = ("📝 Домашнее задание" if acc["role"] == "student"
-                else f"📝 Домашнее задание · <b>{escape(s['name'])}</b>")
+                else f"📝 Домашнее задание: <b>{escape(s['name'])}</b>")
         try:
             if first:
-                await bot.send_message(acc["tg_id"], f"{head} от {escape(teacher['name'])}:")
+                await bot.send_message(acc["tg_id"], f"{head}\nПреподаватель: {escape(teacher['name'])}")
             await message.copy_to(acc["tg_id"])
             sent += 1
         except Exception:

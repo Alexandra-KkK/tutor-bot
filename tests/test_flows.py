@@ -236,7 +236,7 @@ async def test_second_teacher_account_login(h):
     calls = await h.click(T, "inv:login")
     assert f"start=login_{teacher['teacher_secret']}" in h.texts(calls)
     calls = await h.send(555, f"/start login_{teacher['teacher_secret']}")
-    assert "Вы вошли" in h.texts(calls)
+    assert "Вход выполнен" in h.texts(calls)
     calls = await h.send(555, B.SCHEDULE)
     assert "Раздел расписания" in h.texts(calls)
 

@@ -115,7 +115,7 @@ def schedule_view() -> InlineKeyboardMarkup:
 
 def schedule_edit() -> InlineKeyboardMarkup:
     return inline([
-        [("Изменить все расписание", "sch:bulk")],
+        [("Изменить всё расписание", "sch:bulk")],
         [("Добавить регулярное занятие", "sch:add")],
         [("Разовое занятие на дату", "sch:single")],
         [("Отменить или перенести занятие", "sch:cancel")],

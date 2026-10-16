@@ -74,7 +74,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext,
             await state.update_data(join_teacher=target["id"], join_student=invited["id"] if invited else None)
             who = f"\nУченик: <b>{escape(invited['name'])}</b>" if invited else ""
             await message.answer(
-                f"Вас пригласил преподаватель <b>{escape(target['name'])}</b>.{who}\n\nКто вы?",
+                f"👋 Приглашение в бот для занятий.\nПреподаватель: <b>{escape(target['name'])}</b>{who}\n\nКто вы?",
                 reply_markup=kb.inline([[("Я ученик", "join:student"), ("Я родитель", "join:parent")]]),
             )
             return
@@ -151,7 +151,7 @@ async def _login(message: Message, db: Database, config: Config, account: dict |
     if message.from_user.id in config.admin_ids:
         await db.update_teacher(teacher["id"], free_forever=1)
     account = await db.get_account(message.from_user.id)
-    await send_menu(message, account, f"Вы вошли в кабинет преподавателя <b>{escape(teacher['name'])}</b>.")
+    await send_menu(message, account, f"Вход выполнен ✅\nПреподаватель: <b>{escape(teacher['name'])}</b>")
 
 
 # ---------------------------------------------------------------- регистрация ученика и родителя
