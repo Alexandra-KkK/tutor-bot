@@ -5,7 +5,7 @@ import sys
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 from aiogram.types import BotCommand
 
 from . import keyboards, subscription
@@ -32,7 +32,8 @@ def build_dispatcher(db: Database, config: Config) -> Dispatcher:
     subscription.ENABLED = config.subscription_enabled
     keyboards.ADMIN_IDS.clear()
     keyboards.ADMIN_IDS.update(config.admin_ids)
-    dp = Dispatcher(storage=MemoryStorage(), db=db, config=config)
+    # события одного пользователя обрабатываются по очереди: фото из альбома не обгоняют друг друга
+    dp = Dispatcher(storage=MemoryStorage(), events_isolation=SimpleEventIsolation(), db=db, config=config)
     middleware = ContextMiddleware()
     dp.message.outer_middleware(middleware)
     dp.callback_query.outer_middleware(middleware)

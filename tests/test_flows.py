@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from bot import broadcast
@@ -290,6 +291,32 @@ async def test_homework(h):
     assert {c.chat_id for c in copies} == {S, P}
     assert "2 из 2" in h.texts(calls)
 
+
+
+async def test_homework_album_and_several_messages(h):
+    from aiogram.types import PhotoSize
+    await register_teacher(h)
+    await h.click(T, "stu:add")
+    await h.send(T, "Маша")
+    await h.click(T, "stu:add:skip")
+    student = await join_family(h)
+    await h.click(T, f"hw:{student['id']}")
+    start = len(h.session.calls)
+    photo = [PhotoSize(file_id="f", file_unique_id="u", width=10, height=10)]
+    # Фото из альбома приходят почти одновременно
+    await asyncio.gather(h.send(T, None, photo=photo, caption="№ 125", media_group_id="A1"),
+                         h.send(T, None, photo=photo, media_group_id="A1"))
+    await h.send(T, "И ещё № 126")
+    calls = h.session.calls[start:]
+    copies = [c for c in calls if type(c).__name__ == "CopyMessage"]
+    assert len(copies) == 6  # три сообщения ученику и родителю
+    heads = [c for c in calls if "Домашнее задание" in (getattr(c, "text", None) or "")]
+    assert sorted(c.chat_id for c in heads) == sorted([S, P])  # заголовок один раз
+    confirms = [c for c in calls if "Отправлено ученику" in (getattr(c, "text", None) or "")]
+    assert len(confirms) == 2  # на альбом и на текст
+    await h.click(T, f"hw:done:{student['id']}")
+    calls = await h.send(T, "просто текст")
+    assert not [c for c in calls if type(c).__name__ == "CopyMessage"]
 
 async def test_parent_with_two_children(h):
     await register_teacher(h)
