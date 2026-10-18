@@ -85,18 +85,21 @@ python run.py
 > на сервере (VPS), см. ниже.
 
 ### Круглосуточная работа на сервере
-Подойдёт самый простой VPS с Ubuntu (Timeweb Cloud, Selectel, Beget и т.п., от ~200 ₽/мес).
+Подойдёт самый простой VPS с Ubuntu (например, RuVDS «Старт», 149 ₽/мес: 512 МБ памяти, IP в цене).
+Timeweb Cloud и Selectel тоже подходят, но у них минимальный сервер стоит около 2000 ₽/мес.
 Пошагово для новичка: [ЗАПУСК.md](ЗАПУСК.md). Коротко, одна команда на сервере:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ЛОГИН/РЕПОЗИТОРИЙ/main/deploy/install.sh | sudo bash -s ЛОГИН/РЕПОЗИТОРИЙ
 ```
 
-Скрипт ставит Docker, скачивает бота в `/opt/tutor-bot`, спрашивает токен и ID и запускает бота
-(он сам перезапускается после сбоев и перезагрузки сервера).
-Обновить: `cd /opt/tutor-bot && git pull && docker compose up -d --build`.
+Скрипт скачивает бота в `/opt/tutor-bot`, ставит Python-библиотеки в `.venv`, спрашивает токен и ID
+и запускает бота службой systemd (`deploy/tutor-bot.service`): он сам поднимается после сбоев
+и перезагрузки сервера. Памяти нужно мало, поэтому хватает самого дешёвого тарифа.
+Обновить: `cd /opt/tutor-bot && git pull && .venv/bin/pip install -q -r requirements.txt && systemctl restart tutor-bot`.
+Журнал: `journalctl -u tutor-bot -f -n 50`.
 
-Вариант без Docker — служба systemd, пример в `deploy/tutor-bot.service`.
+Вариант с Docker — `docker compose up -d --build`, нужен сервер от 1 ГБ памяти.
 
 База данных — один файл `data/bot.sqlite3`. Для резервной копии достаточно скопировать его.
 
