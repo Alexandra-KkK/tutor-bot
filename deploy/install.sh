@@ -9,6 +9,16 @@ if [ -z "$REPO" ]; then
   echo "Укажите репозиторий: ... | sudo bash -s логин/репозиторий"; exit 1
 fi
 
+# На самых дешёвых серверах 1 ГБ памяти, и сборка может не поместиться: добавляем файл подкачки
+if ! swapon --show | grep -q . && [ ! -f /swapfile ]; then
+  echo "==> Добавляю файл подкачки"
+  fallocate -l 1G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none
+  chmod 600 /swapfile
+  mkswap -q /swapfile
+  swapon /swapfile
+  grep -q '^/swapfile' /etc/fstab || echo "/swapfile none swap sw 0 0" >>/etc/fstab
+fi
+
 echo "==> Устанавливаю Docker и git"
 apt-get update -qq
 apt-get install -y -qq git ca-certificates curl >/dev/null
