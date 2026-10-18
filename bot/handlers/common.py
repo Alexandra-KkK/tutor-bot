@@ -164,7 +164,7 @@ async def reg_family(call: CallbackQuery, state: FSMContext, account: dict | Non
     role = "student" if call.data == "reg:student" else "parent"
     await state.set_state(Reg.invite)
     await state.update_data(join_role=role)
-    await show(call, "Чтобы подключиться, нажмите на ссылку-приглашение, которую прислал преподаватель. "
+    await show(call, "Чтобы подключиться, нажмите на ссылку-приглашение от преподавателя. "
                      "Больше ничего делать не нужно 🙂\n\n"
                      "Если ссылка не открывается, перешлите её сюда сообщением.")
 
@@ -240,7 +240,7 @@ async def _finish_join(message: Message, state: FSMContext, db: Database, bot: B
     for tg_id in await db.teacher_accounts(teacher["id"]):
         try:
             await bot.send_message(
-                tg_id, f"🔔 {who} <b>{escape(student['name'])}</b> подключился к боту: "
+                tg_id, f"🔔 {who} <b>{escape(student['name'])}</b> теперь в боте: "
                        f"{escape(user.full_name)}{contact}.", reply_markup=markup)
         except Exception:
             pass

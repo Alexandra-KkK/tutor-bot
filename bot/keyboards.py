@@ -21,6 +21,7 @@ class B:
     MY_SCHEDULE = "📅 Моё расписание"
     NEXT_LESSON = "⏰ Ближайшее занятие"
     MY_TEACHER = "👩‍🏫 Мой преподаватель"
+    SEND_HW = "📸 Сдать домашку"
     ADMIN = "🛠 Админ-панель"
 
 
@@ -32,7 +33,8 @@ TEACHER_MENU_BUTTONS = {
     B.SCHEDULE, B.STUDENTS, B.INCOME, B.MY_SUB, B.CANCEL_SUB, B.SECRETS,
     B.SETTINGS, B.SUPPORT, B.CANCEL, B.RESTART, B.OLD_SECRETS,
 }
-STUDENT_MENU_BUTTONS = {B.MY_SCHEDULE, B.NEXT_LESSON, B.MY_TEACHER, B.SUPPORT, B.CANCEL, B.RESTART}
+STUDENT_MENU_BUTTONS = {B.MY_SCHEDULE, B.NEXT_LESSON, B.MY_TEACHER, B.SEND_HW, B.SUPPORT,
+                        B.CANCEL, B.RESTART}
 ALL_MENU_BUTTONS = TEACHER_MENU_BUTTONS | STUDENT_MENU_BUTTONS | {B.ADMIN}
 
 
@@ -57,11 +59,16 @@ def teacher_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     return kb.as_markup(resize_keyboard=True, is_persistent=True)
 
 
-def student_menu() -> ReplyKeyboardMarkup:
+def student_menu(role: str = "student") -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardBuilder()
-    for text in (B.MY_SCHEDULE, B.NEXT_LESSON, B.MY_TEACHER, B.SUPPORT, B.CANCEL, B.RESTART):
+    # «Сдать домашку» — только ученику: родитель задание не выполняет
+    buttons = (B.MY_SCHEDULE, B.SEND_HW, B.NEXT_LESSON, B.MY_TEACHER, B.SUPPORT) if role == "student" else (
+        B.MY_SCHEDULE, B.NEXT_LESSON, B.MY_TEACHER, B.SUPPORT)
+    for text in buttons:
         kb.button(text=text)
-    kb.adjust(1, 1, 1, 1, 2)
+    kb.button(text=B.CANCEL)
+    kb.button(text=B.RESTART)
+    kb.adjust(*((1, 1, 1, 1, 1, 2) if role == "student" else (1, 1, 1, 1, 2)))
     return kb.as_markup(resize_keyboard=True, is_persistent=True)
 
 

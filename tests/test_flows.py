@@ -86,7 +86,7 @@ async def join_family(h):
     calls = await h.send(S, f"/start {teacher['student_secret']}_{student['id']}")
     assert "Ученик: <b>Маша</b>" in h.texts(calls)
     calls = await h.click(S, "join:student")
-    assert "подключился" in h.texts(calls)  # уведомление учителю
+    assert "теперь в боте" in h.texts(calls)  # уведомление учителю
     # Родитель — по общей ссылке: списка чужих учеников не видит, пишет имя
     await h.send(P, f"/start {teacher['student_secret']}")
     calls = await h.click(P, "join:parent")
@@ -96,7 +96,9 @@ async def join_family(h):
     return student
 
 
-async def test_family_join_and_notifications(h):
+async def test_family_join_and_notifications(h, monkeypatch):
+    # Понедельник 19.10.2026, 9:00 по Москве: урок в 15:00 ещё впереди в любое время запуска тестов
+    _freeze(monkeypatch, "2026-10-19T09:00:00")
     await register_teacher(h)
     teacher = await h.db.get_teacher(1)
     today = local_now(teacher["tz_offset"]).date()
@@ -292,6 +294,84 @@ async def test_homework(h):
     assert "2 из 2" in h.texts(calls)
 
 
+
+
+async def test_homework_submit_and_check(h, monkeypatch):
+    # Понедельник 19.10.2026: следующий урок Маши — в четверг
+    _freeze(monkeypatch, "2026-10-19T09:00:00")
+    await register_teacher(h)
+    await h.click(T, "sch:bulk")
+    await h.send(T, "Чт 15:00 Маша 1500")
+    await h.click(T, "sch:bulk:save")
+    student = await join_family(h)
+
+    # Преподаватель отправляет задание: родителю — со сроком, ученику — тоже
+    await h.click(T, f"hw:{student['id']}")
+    calls = await h.send(T, "№ 125, 126 из учебника")
+    to_parent = [c for c in calls if getattr(c, "chat_id", None) == P
+                 and "Домашнее задание" in (getattr(c, "text", None) or "")]
+    assert "четверг, 22.10 в 15:00" in to_parent[0].text
+    assert "выполнить до следующего урока" in to_parent[0].text
+    to_student = [c for c in calls if getattr(c, "chat_id", None) == S
+                  and "Домашнее задание" in (getattr(c, "text", None) or "")]
+    assert "Сделать до следующего урока: четверг, 22.10 в 15:00" in to_student[0].text
+
+    # «Готово» — ученику приходит напоминание прислать фото
+    calls = await h.click(T, f"hw:done:{student['id']}")
+    ask = [c for c in calls if getattr(c, "chat_id", None) == S][0]
+    submit_button = [b for b in h.buttons([ask]) if b.startswith("📸")][0].split("|")[1]
+    hw = await h.db.last_homework(student["id"])
+    assert submit_button == f"hws:{hw['id']}" and hw["status"] == "sent"
+
+    # Ученик сдаёт работу: преподаватель получает её и кнопки отметки
+    await h.click(S, submit_button)
+    calls = await h.send(S, "вот решение")
+    assert [c for c in calls if type(c).__name__ == "CopyMessage"][0].chat_id == T
+    assert "Домашнее задание на проверку" in h.texts(calls)
+    assert (await h.db.get_homework(hw["id"]))["status"] == "submitted"
+    mark = [b for b in h.buttons(calls) if b.startswith("✅")][0].split("|")[1]
+
+    # «Зачтено» видят и ученик, и родитель
+    calls = await h.click(T, mark)
+    assert "зачтено" in next(c.text for c in calls if getattr(c, "chat_id", None) == S and getattr(c, "text", None))
+    assert "зачтено" in next(c.text for c in calls if getattr(c, "chat_id", None) == P and getattr(c, "text", None))
+    assert (await h.db.get_homework(hw["id"]))["status"] == "done"
+    calls = await h.click(T, f"stu:card:{student['id']}")
+    assert "Домашнее задание зачтено" in h.texts(calls)
+
+
+async def test_homework_redo_and_student_menu_button(h):
+    await register_teacher(h)
+    await h.click(T, "stu:add")
+    await h.send(T, "Маша")
+    await h.click(T, "stu:add:skip")
+    student = await join_family(h)
+    await h.click(T, f"hw:{student['id']}")
+    await h.send(T, "№ 125")
+    await h.click(T, f"hw:done:{student['id']}")
+    hw = await h.db.last_homework(student["id"])
+
+    # Ученик сдаёт через кнопку меню, преподаватель отправляет на доработку
+    calls = await h.send(S, B.SEND_HW)
+    assert "выполненное задание" in h.texts(calls)
+    calls = await h.send(S, "готово")
+    redo = [b for b in h.buttons(calls) if b.startswith("🔁")][0].split("|")[1]
+    calls = await h.click(T, redo)
+    assert "доделать" in next(c.text for c in calls if getattr(c, "chat_id", None) == S and getattr(c, "text", None))
+    assert "доделать" in next(c.text for c in calls if getattr(c, "chat_id", None) == P and getattr(c, "text", None))
+    assert (await h.db.get_homework(hw["id"]))["status"] == "redo"
+    assert (await h.db.open_homework(student["id"]))["id"] == hw["id"]
+
+    # У родителя кнопки «Сдать домашку» нет
+    calls = await h.send(P, B.SEND_HW)
+    assert "для ученика" in h.texts(calls)
+
+    # Фото без нажатия кнопки тоже уходит преподавателю как домашнее задание
+    from aiogram.types import PhotoSize
+    photo = [PhotoSize(file_id="f", file_unique_id="u", width=10, height=10)]
+    calls = await h.send(S, None, photo=photo, caption="исправил")
+    assert [c for c in calls if type(c).__name__ == "CopyMessage"][0].chat_id == T
+    assert (await h.db.get_homework(hw["id"]))["status"] == "submitted"
 
 async def test_homework_album_and_several_messages(h):
     from aiogram.types import PhotoSize

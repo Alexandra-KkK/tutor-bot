@@ -110,6 +110,12 @@ async def _card(target, db: Database, teacher: dict, student_id: int):
         lines.append(f"В боте: ученик — {'да' if kids else 'нет'}, родителей — {parents}")
     else:
         lines.append("В боте: не подключён")
+    hw = await db.last_homework(s["id"])
+    if hw:
+        lines.append({"sent": "📝 Домашнее задание отправлено, работа ещё не пришла",
+                      "submitted": "📬 Домашнее задание прислано, ждёт вашей отметки",
+                      "done": "✅ Домашнее задание зачтено",
+                      "redo": "🔁 Домашнее задание на доработке"}[hw["status"]])
     cnt, earned = earned_by_student(sch).get(s["id"], (0, 0))
     paid = sum(p["amount"] for p in await db.payments(teacher["id"], student_id=s["id"]))
     lines.append(f"\nПроведено занятий: {cnt} на {money(earned)}")

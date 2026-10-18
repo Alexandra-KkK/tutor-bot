@@ -24,7 +24,7 @@ async def show(target: Message | CallbackQuery, text: str, markup: InlineKeyboar
 def main_menu(account: dict):
     if account["role"] == "teacher":
         return kb.teacher_menu(account["tg_id"] in kb.ADMIN_IDS)
-    return kb.student_menu()
+    return kb.student_menu(account["role"])
 
 
 async def send_menu(message: Message, account: dict, text: str = "Главное меню:") -> None:

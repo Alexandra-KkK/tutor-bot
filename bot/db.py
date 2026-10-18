@@ -166,6 +166,16 @@ CREATE TABLE IF NOT EXISTS memes (
     created_at  TEXT NOT NULL
 );
 
+-- Домашние задания: что отправил преподаватель и что прислал ученик
+CREATE TABLE IF NOT EXISTS homework (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    teacher_id  INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+    student_id  INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    due         TEXT NOT NULL DEFAULT '',      -- срок: дата и время следующего урока
+    status      TEXT NOT NULL DEFAULT 'sent',  -- sent | submitted | done | redo
+    created_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sent_notifications (
     key         TEXT PRIMARY KEY,
     created_at  TEXT NOT NULL
@@ -176,6 +186,7 @@ CREATE INDEX IF NOT EXISTS idx_weekly_teacher ON weekly_lessons(teacher_id);
 CREATE INDEX IF NOT EXISTS idx_single_teacher ON single_lessons(teacher_id, date);
 CREATE INDEX IF NOT EXISTS idx_accounts_teacher ON accounts(teacher_id);
 CREATE INDEX IF NOT EXISTS idx_account_students ON account_students(student_id);
+CREATE INDEX IF NOT EXISTS idx_homework_student ON homework(student_id, id);
 """
 
 TEACHER_COLUMNS = {
@@ -613,6 +624,28 @@ class Database:
         return await self._all(
             "SELECT * FROM lesson_reports WHERE teacher_id = ? AND student_id = ? "
             "ORDER BY date DESC, time DESC LIMIT ?", teacher_id, student_id, limit)
+
+    # ------------------------------------------------------------ домашние задания
+
+    async def add_homework(self, teacher_id: int, student_id: int, due: str = "") -> int:
+        return await self._exec(
+            "INSERT INTO homework (teacher_id, student_id, due, created_at) VALUES (?, ?, ?, ?)",
+            teacher_id, student_id, due, now_iso())
+
+    async def get_homework(self, homework_id: int) -> dict | None:
+        return await self._one("SELECT * FROM homework WHERE id = ?", homework_id)
+
+    async def open_homework(self, student_id: int) -> dict | None:
+        """Последнее задание, которое ученик ещё не сдал (или которое просили переделать)."""
+        return await self._one(
+            "SELECT * FROM homework WHERE student_id = ? AND status IN ('sent', 'redo') "
+            "ORDER BY id DESC LIMIT 1", student_id)
+
+    async def last_homework(self, student_id: int) -> dict | None:
+        return await self._one("SELECT * FROM homework WHERE student_id = ? ORDER BY id DESC LIMIT 1", student_id)
+
+    async def set_homework_status(self, homework_id: int, status: str) -> None:
+        await self._exec("UPDATE homework SET status = ? WHERE id = ?", status, homework_id)
 
     # ------------------------------------------------------------ промокоды
 
