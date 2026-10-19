@@ -139,6 +139,15 @@ CREATE TABLE IF NOT EXISTS promo_uses (
     PRIMARY KEY (code, teacher_id)
 );
 
+-- Состояние диалогов: что человек сейчас вводит. В облаке процесс живёт недолго,
+-- поэтому состояние хранится в базе, а не в памяти.
+CREATE TABLE IF NOT EXISTS fsm (
+    key         TEXT PRIMARY KEY,
+    state       TEXT,
+    data        TEXT NOT NULL DEFAULT '{}',
+    updated_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key         TEXT PRIMARY KEY,
     value       TEXT NOT NULL
@@ -212,7 +221,9 @@ def new_secret(length: int = 10) -> str:
     return "".join(secrets.choice(SECRET_ALPHABET) for _ in range(length))
 
 
-class Database:
+class _Sqlite:
+    """База в файле на этом компьютере."""
+
     def __init__(self, path: str):
         self.path = path
         self.conn: aiosqlite.Connection | None = None
@@ -222,41 +233,108 @@ class Database:
             os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
         self.conn = await aiosqlite.connect(self.path)
         self.conn.row_factory = aiosqlite.Row
-        await self.conn.executescript(SCHEMA)
-        await self._migrate()
-        await self.conn.commit()
 
-    async def _migrate(self) -> None:
-        """Добавляет колонки, появившиеся в новых версиях, в уже существующую базу."""
-        async with self.conn.execute("PRAGMA table_info(teachers)") as cur:
-            existing = {row[1] for row in await cur.fetchall()}
-        for column, ddl in TEACHER_COLUMNS.items():
-            if column not in existing:
-                await self.conn.execute(f"ALTER TABLE teachers ADD COLUMN {column} {ddl}")
-        async with self.conn.execute("PRAGMA table_info(cancellations)") as cur:
-            if "moved_to" not in {row[1] for row in await cur.fetchall()}:
-                await self.conn.execute("ALTER TABLE cancellations ADD COLUMN moved_to INTEGER")
+    async def query(self, sql: str, args: tuple) -> list[dict]:
+        async with self.conn.execute(sql, args) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def write(self, sql: str, args: tuple) -> tuple[int, int]:
+        cur = await self.conn.execute(sql, args)
+        await self.conn.commit()
+        return cur.lastrowid, cur.rowcount
+
+    async def script(self, sql: str) -> None:
+        await self.conn.executescript(sql)
+        await self.conn.commit()
 
     async def close(self) -> None:
         if self.conn:
             await self.conn.close()
 
+
+class _Libsql:
+    """Облачная база Turso: тот же SQL, что у SQLite, но по сети.
+
+    Нужна там, где файлы не сохраняются между запусками, например на Vercel."""
+
+    def __init__(self, url: str, token: str):
+        self.url, self.token = url, token
+        self.client = None
+
+    async def connect(self) -> None:
+        import libsql_client  # ставится только на сервере, локально не нужен
+        self.client = libsql_client.create_client(self.url, auth_token=self.token or None)
+
+    async def query(self, sql: str, args: tuple) -> list[dict]:
+        rs = await self.client.execute(sql, list(args))
+        return [dict(zip(rs.columns, row)) for row in rs.rows]
+
+    async def write(self, sql: str, args: tuple) -> tuple[int, int]:
+        rs = await self.client.execute(sql, list(args))
+        return rs.last_insert_rowid or 0, rs.rows_affected
+
+    async def script(self, sql: str) -> None:
+        for statement in (s.strip() for s in sql.split(";")):
+            if not statement:
+                continue
+            try:
+                await self.client.execute(statement)
+            except Exception:
+                if not statement.upper().startswith("PRAGMA"):  # PRAGMA по сети не поддерживается
+                    raise
+
+    async def close(self) -> None:
+        if self.client:
+            await self.client.close()
+
+
+CLOUD_SCHEMES = ("libsql://", "wss://", "ws://", "https://", "http://")
+
+
+class Database:
+    def __init__(self, path: str):
+        self.path = path
+        if path.startswith(CLOUD_SCHEMES):
+            self.be = _Libsql(path, os.getenv("TURSO_AUTH_TOKEN", ""))
+        else:
+            self.be = _Sqlite(path)
+
+    async def connect(self) -> None:
+        await self.be.connect()
+        await self.be.script(SCHEMA)
+        await self._migrate()
+
+    async def _migrate(self) -> None:
+        """Добавляет колонки, появившиеся в новых версиях, в уже существующую базу."""
+        existing = {row["name"] for row in await self._all("PRAGMA table_info(teachers)")}
+        for column, ddl in TEACHER_COLUMNS.items():
+            if column not in existing:
+                await self._exec(f"ALTER TABLE teachers ADD COLUMN {column} {ddl}")
+        cancellations = {row["name"] for row in await self._all("PRAGMA table_info(cancellations)")}
+        if "moved_to" not in cancellations:
+            await self._exec("ALTER TABLE cancellations ADD COLUMN moved_to INTEGER")
+
+    async def close(self) -> None:
+        await self.be.close()
+
     # ------------------------------------------------------------ helpers
 
     async def _one(self, sql: str, *args) -> dict | None:
-        async with self.conn.execute(sql, args) as cur:
-            row = await cur.fetchone()
-        return dict(row) if row else None
+        rows = await self.be.query(sql, args)
+        return rows[0] if rows else None
 
     async def _all(self, sql: str, *args) -> list[dict]:
-        async with self.conn.execute(sql, args) as cur:
-            rows = await cur.fetchall()
-        return [dict(r) for r in rows]
+        return await self.be.query(sql, args)
 
     async def _exec(self, sql: str, *args) -> int:
-        cur = await self.conn.execute(sql, args)
-        await self.conn.commit()
-        return cur.lastrowid
+        row_id, _ = await self.be.write(sql, args)
+        return row_id
+
+    async def _changed(self, sql: str, *args) -> int:
+        """Сколько строк изменил запрос."""
+        _, changed = await self.be.write(sql, args)
+        return changed
 
     # ------------------------------------------------------------ аккаунты
 
@@ -270,18 +348,17 @@ class Database:
         existing = await self.get_account(tg_id)
         keep_children = (existing and role == "parent" and existing["role"] == "parent"
                          and existing["teacher_id"] == teacher_id)
-        await self.conn.execute(
+        await self._exec(
             "INSERT INTO accounts (tg_id, role, teacher_id, student_id, full_name, username, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(tg_id) DO UPDATE SET role = excluded.role, "
             "teacher_id = excluded.teacher_id, student_id = excluded.student_id, "
             "full_name = excluded.full_name, username = excluded.username",
-            (tg_id, role, teacher_id, student_id, full_name, username or "", now_iso()))
+            tg_id, role, teacher_id, student_id, full_name, username or "", now_iso())
         if not keep_children:
-            await self.conn.execute("DELETE FROM account_students WHERE tg_id = ?", (tg_id,))
+            await self._exec("DELETE FROM account_students WHERE tg_id = ?", tg_id)
         if student_id is not None:
-            await self.conn.execute(
-                "INSERT OR IGNORE INTO account_students (tg_id, student_id) VALUES (?, ?)", (tg_id, student_id))
-        await self.conn.commit()
+            await self._exec(
+                "INSERT OR IGNORE INTO account_students (tg_id, student_id) VALUES (?, ?)", tg_id, student_id)
 
     async def relink_child(self, tg_id: int, old_student_id: int | None, new_student_id: int) -> None:
         if old_student_id is not None:
@@ -671,15 +748,14 @@ class Database:
 
     async def reserve_promo(self, code: str, teacher_id: int) -> bool:
         """Засчитать использование промокода, если лимит ещё не исчерпан (одним запросом, без гонок)."""
-        cur = await self.conn.execute(
+        changed = await self._changed(
             "UPDATE promo_codes SET used = used + 1 WHERE code = ? AND active = 1 "
-            "AND (max_uses IS NULL OR used < max_uses)", (code.upper(),))
-        if cur.rowcount:
-            await self.conn.execute(
+            "AND (max_uses IS NULL OR used < max_uses)", code.upper())
+        if changed:
+            await self._exec(
                 "INSERT OR IGNORE INTO promo_uses (code, teacher_id, created_at) VALUES (?, ?, ?)",
-                (code.upper(), teacher_id, now_iso()))
-        await self.conn.commit()
-        return bool(cur.rowcount)
+                code.upper(), teacher_id, now_iso())
+        return bool(changed)
 
     async def get_setting(self, key: str) -> str | None:
         row = await self._one("SELECT value FROM settings WHERE key = ?", key)
@@ -690,9 +766,7 @@ class Database:
 
     async def add_perk(self, tg_id: int, perk: str) -> bool:
         """True, если человек получает это впервые."""
-        cur = await self.conn.execute("INSERT OR IGNORE INTO perks (tg_id, perk) VALUES (?, ?)", (tg_id, perk))
-        await self.conn.commit()
-        return bool(cur.rowcount)
+        return bool(await self._changed("INSERT OR IGNORE INTO perks (tg_id, perk) VALUES (?, ?)", tg_id, perk))
 
     async def has_perk(self, tg_id: int, perk: str) -> bool:
         return bool(await self._one("SELECT 1 FROM perks WHERE tg_id = ? AND perk = ?", tg_id, perk))
@@ -712,10 +786,8 @@ class Database:
 
     async def mark_sent(self, key: str) -> bool:
         """True, если уведомление ещё не отправлялось (и теперь помечено)."""
-        cur = await self.conn.execute(
-            "INSERT OR IGNORE INTO sent_notifications (key, created_at) VALUES (?, ?)", (key, now_iso()))
-        await self.conn.commit()
-        return cur.rowcount > 0
+        return await self._changed(
+            "INSERT OR IGNORE INTO sent_notifications (key, created_at) VALUES (?, ?)", key, now_iso()) > 0
 
     async def stats(self) -> dict:
         return {

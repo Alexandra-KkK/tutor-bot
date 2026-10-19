@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from bot import broadcast
 from bot.keyboards import B
 from bot.logic import local_now
+from bot.storage_db import DbStorage
 
 T, S, P, ADMIN = 100, 200, 300, 999
 
@@ -696,3 +697,20 @@ async def test_codes_ignore_lookalike_symbols(h):
     await register_teacher(h)
     await h.db.update_teacher(1, student_secret="PN65N60ZMO")
     assert await h.db.teacher_by_student_secret("pn65n6ozm0")
+
+
+async def test_dialog_state_lives_in_database(h):
+    """В облаке процесс не живёт между сообщениями, поэтому состояние диалога берётся из базы."""
+    h.dp.fsm.storage = DbStorage(h.db)
+    await register_teacher(h)
+    await h.click(T, "sch:add")
+    await h.click(T, "sch:st:new")
+    await h.send(T, "Вова")
+    await h.click(T, "sch:wd:1")
+    # многошаговый диалог дошёл до конца, хотя память между шагами не использовалась
+    assert await h.db._one("SELECT 1 FROM fsm WHERE state IS NOT NULL")
+    await h.send(T, "18:00")
+    calls = await h.click(T, "sch:dur:90")
+    assert "Добавлено" in h.texts(calls)
+    weekly = await h.db.weekly(1)
+    assert weekly[0]["duration"] == 90 and weekly[0]["weekday"] == 1

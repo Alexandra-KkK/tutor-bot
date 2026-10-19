@@ -1,0 +1,11 @@
+tests
+design
+assets
+ЗАПУСК.md
+ИСПРАВЛЕНИЯ.md
+ЗАПУСТИТЬ.bat
+ЗАПУСТИТЬ.command
+АВТОЗАПУСК.bat
+deploy
+Dockerfile
+docker-compose.yml

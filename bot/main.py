@@ -28,12 +28,14 @@ async def on_shutdown() -> None:
     _tasks.clear()
 
 
-def build_dispatcher(db: Database, config: Config) -> Dispatcher:
+def build_dispatcher(db: Database, config: Config, storage=None) -> Dispatcher:
+    """storage задаётся, когда бот работает в облаке: там состояние диалогов хранится в базе."""
     subscription.ENABLED = config.subscription_enabled
     keyboards.ADMIN_IDS.clear()
     keyboards.ADMIN_IDS.update(config.admin_ids)
     # события одного пользователя обрабатываются по очереди: фото из альбома не обгоняют друг друга
-    dp = Dispatcher(storage=MemoryStorage(), events_isolation=SimpleEventIsolation(), db=db, config=config)
+    dp = Dispatcher(storage=storage or MemoryStorage(), events_isolation=SimpleEventIsolation(),
+                    db=db, config=config)
     middleware = ContextMiddleware()
     dp.message.outer_middleware(middleware)
     dp.callback_query.outer_middleware(middleware)
