@@ -714,3 +714,23 @@ async def test_dialog_state_lives_in_database(h):
     assert "Добавлено" in h.texts(calls)
     weekly = await h.db.weekly(1)
     assert weekly[0]["duration"] == 90 and weekly[0]["weekday"] == 1
+
+
+async def test_cloud_schema_survives_comments_with_semicolons(h):
+    """В облаке схема выполняется по одному запросу, а в комментариях SCHEMA есть «;»."""
+    from bot.db import SCHEMA, _Libsql
+
+    executed = []
+
+    class FakeClient:
+        async def execute(self, statement):
+            executed.append(statement)
+
+    be = _Libsql.__new__(_Libsql)
+    be.client = FakeClient()
+    await be.script(SCHEMA)
+
+    # ни один запрос не должен начинаться с обрывка комментария
+    assert not [s for s in executed if s.startswith("не удаляется")]
+    # таблица perks идёт следом за таким комментарием, она и ломалась
+    assert [s for s in executed if s.startswith("CREATE TABLE IF NOT EXISTS perks")]

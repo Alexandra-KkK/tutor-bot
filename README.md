@@ -97,12 +97,14 @@ python run.py
 (у Vercel на бесплатном плане собственное расписание работает только раз в сутки).
 
 Что нужно, всё бесплатно и без карты:
-1. [Turso](https://turso.tech): создать базу, скопировать её адрес `libsql://...` и токен.
+1. [Turso](https://turso.tech): создать базу, скопировать её адрес и токен.
+   Адрес на сайте показан как `libsql://...`, но в настройках пишем его же через `https://`:
+   библиотека ходит по `libsql://` через веб-сокет, а Turso на него отвечает ошибкой 400.
 2. [Vercel](https://vercel.com): войти через GitHub, импортировать этот репозиторий.
 3. В настройках проекта на Vercel задать переменные:
    `BOT_TOKEN`, `DB_PATH` (адрес базы Turso), `TURSO_AUTH_TOKEN`,
    `WEBHOOK_SECRET` и `CRON_SECRET` (любые длинные случайные строки).
-4. Перенести данные с компьютера: `python deploy/to_turso.py data/bot.sqlite3 libsql://... ТОКЕН`.
+4. Перенести данные с компьютера: `python deploy/to_turso.py data/bot.sqlite3 https://... ТОКЕН`.
 5. Открыть один раз `https://ваш-проект.vercel.app/api/setup?key=CRON_SECRET`: это говорит Telegram,
    куда слать сообщения.
 6. [cron-job.org](https://cron-job.org): задание раз в минуту на

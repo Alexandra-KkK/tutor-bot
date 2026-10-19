@@ -275,7 +275,9 @@ class _Libsql:
         return rs.last_insert_rowid or 0, rs.rows_affected
 
     async def script(self, sql: str) -> None:
-        for statement in (s.strip() for s in sql.split(";")):
+        # Комментарии выкидываем до разбиения: в них бывает «;», иначе запрос рвётся пополам
+        clean = "\n".join(line for line in sql.splitlines() if not line.lstrip().startswith("--"))
+        for statement in (s.strip() for s in clean.split(";")):
             if not statement:
                 continue
             try:
