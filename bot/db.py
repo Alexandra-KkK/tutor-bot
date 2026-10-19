@@ -244,6 +244,9 @@ class _Sqlite:
         await self.conn.commit()
         return cur.lastrowid, cur.rowcount
 
+    async def columns(self, table: str) -> set[str]:
+        return {row["name"] for row in await self.query(f"PRAGMA table_info({table})", ())}
+
     async def script(self, sql: str) -> None:
         await self.conn.executescript(sql)
         await self.conn.commit()
@@ -273,6 +276,11 @@ class _Libsql:
     async def write(self, sql: str, args: tuple) -> tuple[int, int]:
         rs = await self.client.execute(sql, list(args))
         return rs.last_insert_rowid or 0, rs.rows_affected
+
+    async def columns(self, table: str) -> set[str]:
+        # PRAGMA по сети не поддерживается, поэтому имена колонок берём из пустой выборки
+        rs = await self.client.execute(f"SELECT * FROM {table} LIMIT 0")
+        return set(rs.columns)
 
     async def script(self, sql: str) -> None:
         # Комментарии выкидываем до разбиения: в них бывает «;», иначе запрос рвётся пополам
@@ -309,12 +317,15 @@ class Database:
 
     async def _migrate(self) -> None:
         """Добавляет колонки, появившиеся в новых версиях, в уже существующую базу."""
-        existing = {row["name"] for row in await self._all("PRAGMA table_info(teachers)")}
-        for column, ddl in TEACHER_COLUMNS.items():
-            if column not in existing:
-                await self._exec(f"ALTER TABLE teachers ADD COLUMN {column} {ddl}")
-        cancellations = {row["name"] for row in await self._all("PRAGMA table_info(cancellations)")}
-        if "moved_to" not in cancellations:
+        # Пустой список колонок означает «не удалось выяснить», а не «таблица пустая»:
+        # в таком случае ничего не трогаем, иначе добавим колонку, которая уже есть, и всё упадёт.
+        existing = await self.be.columns("teachers")
+        if existing:
+            for column, ddl in TEACHER_COLUMNS.items():
+                if column not in existing:
+                    await self._exec(f"ALTER TABLE teachers ADD COLUMN {column} {ddl}")
+        cancellations = await self.be.columns("cancellations")
+        if cancellations and "moved_to" not in cancellations:
             await self._exec("ALTER TABLE cancellations ADD COLUMN moved_to INTEGER")
 
     async def close(self) -> None:

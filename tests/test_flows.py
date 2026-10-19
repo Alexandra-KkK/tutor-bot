@@ -734,3 +734,39 @@ async def test_cloud_schema_survives_comments_with_semicolons(h):
     assert not [s for s in executed if s.startswith("не удаляется")]
     # таблица perks идёт следом за таким комментарием, она и ломалась
     assert [s for s in executed if s.startswith("CREATE TABLE IF NOT EXISTS perks")]
+
+
+async def test_cloud_start_never_sends_pragma():
+    """Turso не отвечает на PRAGMA, а старт базы раньше спотыкался именно на нём."""
+    from bot.db import SCHEMA, TEACHER_COLUMNS, Database
+
+    sent = []
+
+    class FakeResult:
+        def __init__(self, columns=()):
+            self.columns, self.rows = list(columns), []
+            self.last_insert_rowid, self.rows_affected = 0, 0
+
+    class FakeTurso:
+        async def execute(self, sql, args=None):
+            sent.append(sql)
+            if sql.lstrip().upper().startswith("PRAGMA"):
+                raise RuntimeError("PRAGMA по сети не поддерживается")
+            upper = sql.upper()
+            if upper.startswith("SELECT * FROM TEACHERS"):
+                return FakeResult(TEACHER_COLUMNS)
+            if upper.startswith("SELECT * FROM CANCELLATIONS"):
+                return FakeResult(["moved_to"])
+            return FakeResult()
+
+    db = Database("https://matesha.turso.io")
+    db.be.client = FakeTurso()
+
+    # схему создаём как при запуске; PRAGMA внутри неё безобидна, script() её глушит
+    await db.be.script(SCHEMA)
+
+    # а вот здесь ошибка раньше вылетала наружу и роняла весь запуск
+    sent.clear()
+    await db._migrate()
+
+    assert not [s for s in sent if s.lstrip().upper().startswith("PRAGMA")]
